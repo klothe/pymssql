@@ -2,26 +2,16 @@ import logging
 from os import path
 import time
 
-try:
-    from nose.tools import eq_
-    from nose.plugins.skip import SkipTest
-    from nose.plugins.attrib import attr
+import pytest
 
-    def skip_test(reason='No reason given to skip_test'):
-        raise SkipTest(reason)
+def eq_(a, b):
+    assert a == b
 
-    mark_slow = attr('slow')
-except ImportError:
-    import pytest
+def skip_test(reason='No reason given to skip_test'):
+    pytest.skip(reason)
 
-    def eq_(a, b):
-        assert a == b
-
-    def skip_test(reason='No reason given to skip_test'):
-        pytest.skip(reason)
-
-    def mark_slow(f):
-        return f
+def mark_slow(f):
+    return f
 
 import _mssql
 import pymssql
@@ -49,13 +39,14 @@ def mssqlconn(conn_properties=None):
     )
 
 
-def pymssqlconn():
+def pymssqlconn(**kwargs):
     return pymssql.connect(
         server=config.server,
         user=config.user,
         password=config.password,
         database=config.database,
         port=config.port,
+        **kwargs
     )
 
 
@@ -303,9 +294,28 @@ class CursorBase(DBAPIBase):
     def test_as_dict_no_column_name(self):
         cur = self.conn.cursor(as_dict=True)
         try:
+            # SQL Server >= 2008:
+            #
+            #   SELECT MAX(x), MIN(x) AS [MIN(x)]
+            #   FROM (VALUES (1), (2), (3))
+            #   AS foo(x)
+            #
+            # SQL Server = 2005 (remove when we drop suport for it):
+            #
+            #   SELECT MAX(x), MIN(x) AS [MIN(x)]
+            #   FROM (SELECT 1
+            #         UNION ALL
+            #         SELECT 2
+            #         UNION ALL
+            #         SELECT 3)
+            #   AS foo(x)
             cur.execute(
                 "SELECT MAX(x), MIN(x) AS [MIN(x)] "
-                "FROM (VALUES (1), (2), (3)) AS foo(x)")
+                "FROM (SELECT 1"
+                "      UNION ALL"
+                "      SELECT 2"
+                "      UNION ALL"
+                "      SELECT 3) AS foo(x)")
             assert False, "Didn't raise InterfaceError"
         except pymssql.ColumnsWithoutNamesError as exc:
             eq_(exc.columns_without_names, [0])
@@ -313,9 +323,28 @@ class CursorBase(DBAPIBase):
     def test_as_dict_no_column_name_2(self):
         cur = self.conn.cursor(as_dict=True)
         try:
+            # SQL Server >= 2008:
+            #
+            #   SELECT MAX(x), MAX(y) AS [MAX(y)], MIN(y)
+            #   FROM (VALUES (1, 2), (2, 3), (3, 4))
+            #   AS foo(x, y)
+            #
+            # SQL Server = 2005 (remove when we drop suport for it):
+            #
+            #   SELECT MAX(x), MAX(y) AS [MAX(y)], MIN(y)
+            #   FROM (SELECT (1, 2)
+            #         UNION ALL
+            #         SELECT (2, 3)
+            #         UNION ALL
+            #         SELECT (3, 4))
+            #   AS foo(x, y)
             cur.execute(
                 "SELECT MAX(x), MAX(y) AS [MAX(y)], MIN(y) "
-                "FROM (VALUES (1, 2), (2, 3), (3, 4)) AS foo(x, y)")
+                "FROM (SELECT 1, 2"
+                "      UNION ALL"
+                "      SELECT 2, 3"
+                "      UNION ALL"
+                "      SELECT 3, 4) AS foo(x, y)")
             assert False, "Didn't raise InterfaceError"
         except pymssql.ColumnsWithoutNamesError as exc:
             eq_(exc.columns_without_names, [0, 2])
